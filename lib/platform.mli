@@ -2,14 +2,7 @@
 
 (** Opam variables. *)
 module Vars : sig
-  type t = {
-    arch : string;
-    os : string;
-    os_family : string;
-    os_distribution : string;
-    os_version : string;
-    ocaml_version : string;
-  } [@@deriving yojson]
+  type t = Ocaml_ci_api.Worker.Vars.t
 
   val ocaml_major_version : t -> Ocaml_version.t
 end

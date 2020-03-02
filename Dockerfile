@@ -12,6 +12,10 @@ COPY --chown=opam \
 	ocurrent/current_slack.opam \
 	ocurrent/current_web.opam \
 	/src/ocurrent/
+COPY --chown=opam \
+	opam-0install-solver/opam-zi.opam \
+	opam-0install-solver/0install-solver.opam \
+	/src/opam-0install-solver/
 WORKDIR /src
 RUN opam pin add -yn current_ansi.dev "./ocurrent" && \
     opam pin add -yn current_docker.dev "./ocurrent" && \
@@ -21,7 +25,8 @@ RUN opam pin add -yn current_ansi.dev "./ocurrent" && \
     opam pin add -yn current.dev "./ocurrent" && \
     opam pin add -yn current_rpc.dev "./ocurrent" && \
     opam pin add -yn current_slack.dev "./ocurrent" && \
-    opam pin add -yn current_web.dev "./ocurrent"
+    opam pin add -yn current_web.dev "./ocurrent" && \
+    opam pin add -yn opam-zi.dev "./opam-0install-solver"
 COPY --chown=opam ocaml-ci-service.opam ocaml-ci-api.opam /src/
 RUN opam install -y --deps-only .
 ADD --chown=opam . .

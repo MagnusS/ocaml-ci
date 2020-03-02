@@ -1,6 +1,8 @@
 open Lwt.Infix
 open Current.Syntax
 
+module Worker = Ocaml_ci_api.Worker
+
 let pool = Current.Pool.create ~label:"analyse" 2
 
 let is_empty_file x =
@@ -12,11 +14,20 @@ let is_toplevel path = not (String.contains path '/')
 
 let ( >>!= ) = Lwt_result.bind
 
+let read_file ~max_len path =
+  let ch = open_in path in
+  Fun.protect ~finally:(fun () -> close_in ch)
+    (fun () ->
+       let len = in_channel_length ch in
+       if len <= max_len then really_input_string ch len
+       else Fmt.failwith "File %S too big (%d bytes)" path len
+    )
+
 module Analysis = struct
   type t = {
     opam_files : string list;
     ocamlformat_source : Analyse_ocamlformat.source option;
-    selections : [ `Opam_build of string list | `Duniverse of string list ]; (* List of variants *)
+    selections : [ `Opam_build of Worker.Selection.t list | `Duniverse of string list ];
   }
   [@@deriving yojson]
 
@@ -59,9 +70,9 @@ module Analysis = struct
       Fmt.failwith "Exception parsing dune-get: %a" Fmt.exn exn
 
   let pp_ocaml_version f (_variant, vars) =
-    Fmt.string f vars.Platform.Vars.ocaml_version
+    Fmt.string f vars.Worker.Vars.ocaml_version
 
-  let of_dir ~job ~platforms dir =
+  let of_dir ~solver ~job ~platforms ~opam_repository dir =
     let is_duniverse = Sys.file_exists (Filename.concat (Fpath.to_string dir) "dune-get") in
     let cmd = "", [| "find"; "."; "-maxdepth"; "3"; "-name"; "*.opam" |] in
     Current.Process.check_output ~cwd:dir ~cancellable:true ~job cmd >>!= fun output ->
@@ -121,19 +132,44 @@ module Analysis = struct
           in
           let variants = List.filter_map find_compiler vs in
           if variants = [] then failwith "No supported compilers found!";
-          Lwt.return (`Duniverse variants)
+          Lwt_result.return (`Duniverse variants)
         ) else (
-          Lwt.return (`Opam_build (List.map fst platforms))
+          let src = Fpath.to_string dir in
+          let ( / ) = Filename.concat in
+          let root_pkgs, pinned_pkgs =
+            opam_files |> List.fold_left (fun (root_pkgs, pinned_pkgs) path ->
+                let name = Filename.basename path |> Filename.chop_extension in
+                let name = if String.contains name '.' then name else name ^ ".dev" in
+                let item = name, read_file ~max_len:102400 (src / path) in
+                if Filename.dirname path = "." then
+                  (item :: root_pkgs, pinned_pkgs)
+                else
+                  (root_pkgs, item :: pinned_pkgs)
+              ) ([], [])
+          in
+          let request = { Ocaml_ci_api.Worker.Solve_request.
+            opam_repository = Fpath.to_string opam_repository;
+            root_pkgs;
+            pinned_pkgs;
+            platforms
+          } in
+          let stdin = Yojson.Safe.to_string ( Ocaml_ci_api.Worker.Solve_request.to_yojson request) in
+          Current.Process.check_output ~job ~stdin ~cancellable:true solver >>!= fun response ->
+          let json = Yojson.Safe.from_string response in
+          match [%derive.of_yojson:Worker.Selection.t list] json with
+          | Ok [] -> Lwt.return (Fmt.error_msg "No solution found for any supported platform")
+          | Ok x -> Lwt_result.return (`Opam_build x)
+          | Error msg -> Lwt.return (Fmt.error_msg "Bad solver response: %s" msg)
         )
-      end >|= fun selections ->
+      end >>!= fun selections ->
       let r = { opam_files; ocamlformat_source; selections } in
       Current.Job.log job "@[<v2>Results:@,%a@]" Yojson.Safe.(pretty_print ~std:true) (to_yojson r);
-      Ok r
+      Lwt_result.return r
     )
 end
 
 module Examine = struct
-  type t = No_context
+  type t = Lwt_process.command          (* Command to run solver process *)
 
   module Key = struct
     type t = Current_git.Commit.t
@@ -148,17 +184,19 @@ module Examine = struct
 
   module Value = struct
     type t = {
+      opam_repository : Current_git.Commit.t;
       platforms : (string * Platform.Vars.t) list;
     }
 
     let platform_to_yojson (variant, vars) =
       `Assoc [
         "variant", `String variant;
-        "vars", Platform.Vars.to_yojson vars
+        "vars", Worker.Vars.to_yojson vars
       ]
 
-    let digest { platforms } =
+    let digest { opam_repository; platforms } =
       let json = `Assoc [
+          "opam-repository", `String (Current_git.Commit.hash opam_repository);
           "platforms", `List (List.map platform_to_yojson platforms);
         ]
       in
@@ -169,10 +207,11 @@ module Examine = struct
 
   let id = "ci-analyse"
 
-  let run No_context job src { Value.platforms } =
+  let run solver job src { Value.opam_repository; platforms } =
     Current.Job.start job ~pool ~level:Current.Level.Harmless >>= fun () ->
     Current_git.with_checkout ~job src @@ fun src ->
-    Analysis.of_dir ~platforms ~job src
+    Current_git.with_checkout ~job opam_repository @@ fun opam_repository ->
+    Analysis.of_dir ~solver ~platforms ~opam_repository ~job src
 
   let pp f _ = Fmt.string f "Analyse"
 
@@ -182,9 +221,10 @@ end
 
 module Examine_cache = Current_cache.Generic(Examine)
 
-let examine ~platforms src =
+let examine ~solver ~platforms ~opam_repository src =
   Current.component "Analyse" |>
   let> src = src
+  and> opam_repository = opam_repository
   and> platforms = platforms in
   let platforms = platforms |> List.map (fun { Platform.variant; vars; _ } -> (variant, vars)) in
-  Examine_cache.run Examine.No_context src { Examine.Value.platforms }
+  Examine_cache.run solver src { Examine.Value.opam_repository; platforms }

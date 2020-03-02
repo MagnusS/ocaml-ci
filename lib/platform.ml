@@ -7,14 +7,7 @@ let docker_tag ~distro ~ocaml_version =
   Printf.sprintf "%s-ocaml-%s" distro ocaml_version
 
 module Vars = struct
-  type t = {
-    arch : string;
-    os : string;
-    os_family : string;
-    os_distribution : string;
-    os_version : string;
-    ocaml_version : string;
-  } [@@deriving yojson]
+  include Ocaml_ci_api.Worker.Vars
 
   let template = {|
     {
