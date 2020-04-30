@@ -12,6 +12,15 @@ module Vars = struct
   } [@@deriving yojson]
 end
 
+(** A set of packages for a single build. *)
+module Selection = struct
+  type t = {
+    id : string;                        (** The platform ID from the request. *)
+    packages : string list;             (** The selected packages ("name.version"). *)
+    commit : string;                    (** A commit in opam-repository to use. *)
+  } [@@deriving yojson]
+end
+
 (** A request to select sets of packages for the builds. *)
 module Solve_request = struct
   type t = {
@@ -22,11 +31,12 @@ module Solve_request = struct
   } [@@deriving yojson]
 end
 
-(** A set of packages for a single build. *)
-module Selection = struct
-  type t = {
-    id : string;                        (** The platform ID from the request. *)
-    packages : string list;             (** The selected packages ("name.version"). *)
-    commit : string;                    (** A commit in opam-repository to use. *)
-  } [@@deriving yojson]
+(** The response from the solver. *)
+module Solve_response = struct
+  type ('a, 'b) result = ('a, 'b) Stdlib.result =
+    | Ok of 'a
+    | Error of 'b
+  [@@deriving yojson]
+
+  type t = (Selection.t list, [`Msg of string]) result [@@deriving yojson]
 end

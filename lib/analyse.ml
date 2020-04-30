@@ -156,10 +156,13 @@ module Analysis = struct
           let stdin = Yojson.Safe.to_string ( Ocaml_ci_api.Worker.Solve_request.to_yojson request) in
           Current.Process.check_output ~job ~stdin ~cancellable:true solver >>!= fun response ->
           let json = Yojson.Safe.from_string response in
-          match [%derive.of_yojson:Worker.Selection.t list] json with
-          | Ok [] -> Lwt.return (Fmt.error_msg "No solution found for any supported platform")
-          | Ok x -> Lwt_result.return (`Opam_build x)
+          match Worker.Solve_response.of_yojson json with
           | Error msg -> Lwt.return (Fmt.error_msg "Bad solver response: %s" msg)
+          | Ok response ->
+            match response with
+            | Ok [] -> Lwt.return (Fmt.error_msg "No solution found for any supported platform")
+            | Ok x -> Lwt_result.return (`Opam_build x)
+            | Error (`Msg msg) -> Lwt.return (Fmt.error_msg "Error from solver: %s" msg)
         )
       end >>!= fun selections ->
       let r = { opam_files; ocamlformat_source; selections } in
