@@ -44,6 +44,8 @@ module Context = struct
   let user_restrictions t name =
     OpamPackage.Name.Map.find_opt name t.constraints
 
+  let dev = OpamPackage.Version.of_string "dev"
+
   let env t pkg v =
     if List.mem v OpamPackageVar.predefined_depends_variables then None
     else match OpamVariable.Full.to_string v with
@@ -58,10 +60,11 @@ module Context = struct
         None
 
   let filter_deps t pkg f =
+    let dev = OpamPackage.Version.compare (OpamPackage.version pkg) dev = 0 in
     let test = OpamPackage.Name.Set.mem (OpamPackage.name pkg) t.test in
     f
     |> OpamFilter.partial_filter_formula (env t pkg)
-    |> OpamFilter.filter_deps ~build:true ~post:true ~test ~doc:false ~dev:false ~default:false
+    |> OpamFilter.filter_deps ~build:true ~post:true ~test ~doc:false ~dev ~default:false
 
   let candidates t name =
     match OpamPackage.Name.Map.find_opt name t.pins with
